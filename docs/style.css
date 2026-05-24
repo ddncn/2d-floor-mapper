@@ -15,6 +15,19 @@ textarea#data{width:100%;height:calc(100vh - 300px);font-family:monospace;font-s
 pre{background:var(--card);border:1px solid #ddd;padding:12px;white-space:pre-wrap;font-family:monospace;border-radius:6px}
 .visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
 
+/* Panels and forms */
+.panel{background:var(--card);border:1px solid #e3e6ee;padding:10px;border-radius:8px;margin-bottom:10px}
+.panel.small{padding:8px}
+.form-row{margin:8px 0}
+.form-row label{display:flex;flex-direction:column;font-size:13px;color:var(--muted)}
+.form-row input, .form-row select{padding:8px;border-radius:6px;border:1px solid #ddd;margin-top:6px}
+.form-actions{display:flex;gap:8px;margin-top:8px}
+.room-item{padding:8px;border-bottom:1px solid #f0f0f6}
+.room-actions{display:flex;gap:6px;margin-top:6px}
+.room-actions button{background:#eee;color:#111;border:none;padding:6px 8px;border-radius:6px;cursor:pointer}
+.room-actions button:hover{background:#e0e6ef}
+.muted{color:var(--muted);font-size:13px;margin-left:8px}
+
 /* Mobile friendly adjustments */
 @media(max-width:800px){
   body{margin:8px;font-size:16px}

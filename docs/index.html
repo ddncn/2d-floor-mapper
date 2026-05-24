@@ -14,6 +14,9 @@
 
   <div class="toolbar" role="toolbar" aria-label="Floorplan actions">
     <input type="file" id="fileInput" accept=".json" aria-label="Open JSON file" />
+    <button id="newPlan">New Plan</button>
+    <button id="addRoom">Add Room</button>
+    <button id="addDoor">Add Door</button>
     <button id="loadSample">Load sample</button>
     <button id="saveJson">Save JSON</button>
     <button id="exportMeta">Export Metadata</button>
@@ -24,8 +27,33 @@
     <section class="editor">
       <label for="data" class="visually-hidden">Floorplan JSON editor</label>
       <textarea id="data" inputmode="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+
+      <div class="panel" id="roomPanel" hidden>
+        <h3 id="roomPanelTitle">Add Room</h3>
+        <div class="form-row"><label>Name<input id="roomName" /></label></div>
+        <div class="form-row"><label>Length1<input id="roomL1" type="number" min="0" /></label></div>
+        <div class="form-row"><label>Length2<input id="roomL2" type="number" min="0" /></label></div>
+        <div class="form-row"><label>Shade<input id="roomShade" /></label></div>
+        <div class="form-row"><label>Notes<input id="roomNotes" /></label></div>
+        <div class="form-actions"><button id="saveRoom">Save Room</button><button id="cancelRoom">Cancel</button></div>
+      </div>
+
+      <div class="panel" id="doorPanel" hidden>
+        <h3 id="doorPanelTitle">Add Door</h3>
+        <div class="form-row"><label>Room<select id="doorRoom"></select></label></div>
+        <div class="form-row"><label>Wall<select id="doorWall"><option value="N">North</option><option value="E">East</option><option value="S">South</option><option value="W">West</option></select></label></div>
+        <div class="form-row"><label>Offset<input id="doorOffset" type="number" min="0" /></label></div>
+        <div class="form-row"><label>Width<input id="doorWidth" type="number" min="0" /></label></div>
+        <div class="form-row"><label>Connects to<select id="doorConnect"><option value="">(none)</option></select></label></div>
+        <div class="form-actions"><button id="saveDoor">Save Door</button><button id="cancelDoor">Cancel</button></div>
+      </div>
+
     </section>
     <aside class="preview">
+      <div class="panel small">
+        <h3>Rooms</h3>
+        <div id="roomsList"></div>
+      </div>
       <h2>Metadata</h2>
       <pre id="meta"></pre>
       <h2>ASCII</h2>

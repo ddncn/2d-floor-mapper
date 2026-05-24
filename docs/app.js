@@ -1,4 +1,4 @@
-// Browser-side renderer with file load/save and live preview
+// Enhanced UI: guided room/door forms and live JSON sync
 const sample = {
   rooms: [
     {id:'r1', name:'Living Room', length1:20, length2:15, shade:'light', notes:'Hardwood', doors:[{id:'d1', wallId:'S', offsetFromCorner:10, width:3, connectsToRoomId:'r2'}]},
@@ -15,20 +15,54 @@ const saveJsonBtn = document.getElementById('saveJson');
 const exportMetaBtn = document.getElementById('exportMeta');
 const exportAsciiBtn = document.getElementById('exportAscii');
 
-let renderTimer = null;
+const newPlanBtn = document.getElementById('newPlan');
+const addRoomBtn = document.getElementById('addRoom');
+const addDoorBtn = document.getElementById('addDoor');
 
-dataEl.value = JSON.stringify(sample, null, 2);
+const roomPanel = document.getElementById('roomPanel');
+const roomPanelTitle = document.getElementById('roomPanelTitle');
+const roomName = document.getElementById('roomName');
+const roomL1 = document.getElementById('roomL1');
+const roomL2 = document.getElementById('roomL2');
+const roomShade = document.getElementById('roomShade');
+const roomNotes = document.getElementById('roomNotes');
+const saveRoomBtn = document.getElementById('saveRoom');
+const cancelRoomBtn = document.getElementById('cancelRoom');
+
+const doorPanel = document.getElementById('doorPanel');
+const doorRoom = document.getElementById('doorRoom');
+const doorWall = document.getElementById('doorWall');
+const doorOffset = document.getElementById('doorOffset');
+const doorWidth = document.getElementById('doorWidth');
+const doorConnect = document.getElementById('doorConnect');
+const saveDoorBtn = document.getElementById('saveDoor');
+const cancelDoorBtn = document.getElementById('cancelDoor');
+
+const roomsList = document.getElementById('roomsList');
+
+let renderTimer = null;
+let currentDoc = null;
+let editingRoomId = null;
+
+function uid(prefix){ return prefix + Math.random().toString(36).slice(2,8); }
+
+function parseDoc(){
+  try{ currentDoc = JSON.parse(dataEl.value); if(!currentDoc.rooms) currentDoc.rooms = []; } catch(e){ currentDoc = {rooms:[]}; }
+}
+
+function syncTextarea(){ dataEl.value = JSON.stringify(currentDoc, null, 2); debounceRender(); }
 
 function renderAll(){
-  let doc;
-  try{ doc = JSON.parse(dataEl.value); } catch(e){ metaEl.textContent = 'JSON parse error: '+e; asciiEl.textContent = ''; return; }
-  metaEl.textContent = renderMetadata(doc);
-  asciiEl.textContent = renderAsciiWithDoors(doc);
+  parseDoc();
+  metaEl.textContent = renderMetadata(currentDoc);
+  asciiEl.textContent = renderAsciiWithDoors(currentDoc);
+  renderRoomsList();
+  populateDoorRoomSelects();
 }
 
 function debounceRender(){
   if(renderTimer) clearTimeout(renderTimer);
-  renderTimer = setTimeout(renderAll, 250);
+  renderTimer = setTimeout(()=>{ renderAll(); }, 200);
 }
 
 dataEl.addEventListener('input', debounceRender);
@@ -46,6 +80,81 @@ fileInput.addEventListener('change', (e)=>{
 saveJsonBtn.addEventListener('click', ()=>{ download('floorplan.json', dataEl.value); });
 exportMetaBtn.addEventListener('click', ()=>{ download('floorplan_metadata.md', metaEl.textContent); });
 exportAsciiBtn.addEventListener('click', ()=>{ download('floorplan_ascii.txt', asciiEl.textContent); });
+
+newPlanBtn.addEventListener('click', ()=>{ currentDoc = {rooms:[]}; syncTextarea(); showRoomPanel(false); });
+addRoomBtn.addEventListener('click', ()=>{ showRoomPanel(false); });
+addDoorBtn.addEventListener('click', ()=>{ showDoorPanel(); });
+
+cancelRoomBtn.addEventListener('click', ()=>{ hideRoomPanel(); });
+cancelDoorBtn.addEventListener('click', ()=>{ hideDoorPanel(); });
+
+saveRoomBtn.addEventListener('click', ()=>{
+  const name = (roomName.value || '').trim() || 'Room';
+  const l1 = Number(roomL1.value) || 10;
+  const l2 = Number(roomL2.value) || 10;
+  const shade = roomShade.value || null;
+  const notes = roomNotes.value || null;
+
+  if(editingRoomId){
+    const r = currentDoc.rooms.find(x=>x.id===editingRoomId);
+    if(r){ r.name=name; r.length1=l1; r.length2=l2; r.shade=shade; r.notes=notes; }
+  } else {
+    const room = { id: uid('room_'), name, length1:l1, length2:l2, shade, notes, doors:[] };
+    currentDoc.rooms.push(room);
+  }
+  syncTextarea(); hideRoomPanel();
+});
+
+saveDoorBtn.addEventListener('click', ()=>{
+  const rid = doorRoom.value;
+  const wall = doorWall.value;
+  const offset = Number(doorOffset.value) || 0;
+  const width = Number(doorWidth.value) || 3;
+  const connectsTo = doorConnect.value || null;
+  const room = currentDoc.rooms.find(r=>r.id===rid);
+  if(!room){ alert('Room not found'); return; }
+  const door = { id: uid('door_'), wallId: wall, offsetFromCorner:offset, width, connectsToRoomId: connectsTo || null };
+  room.doors = room.doors || [];
+  room.doors.push(door);
+  syncTextarea(); hideDoorPanel();
+});
+
+function showRoomPanel(edit=false, room=null){
+  editingRoomId = null;
+  roomPanel.hidden = false;
+  roomPanel.scrollIntoView({behavior:'smooth', block:'center'});
+  roomPanelTitle.textContent = edit ? 'Edit Room' : 'Add Room';
+  if(edit && room){ editingRoomId = room.id; roomName.value=room.name; roomL1.value=room.length1; roomL2.value=room.length2; roomShade.value=room.shade||''; roomNotes.value=room.notes||''; }
+  else { roomName.value=''; roomL1.value=10; roomL2.value=10; roomShade.value=''; roomNotes.value=''; }
+}
+function hideRoomPanel(){ roomPanel.hidden = true; }
+
+function showDoorPanel(){
+  doorPanel.hidden = false; doorPanel.scrollIntoView({behavior:'smooth', block:'center'}); populateDoorRoomSelects(); doorOffset.value=''; doorWidth.value=3;
+}
+function hideDoorPanel(){ doorPanel.hidden = true; }
+
+function renderRoomsList(){
+  roomsList.innerHTML = '';
+  (currentDoc.rooms||[]).forEach(r=>{
+    const el = document.createElement('div'); el.className='room-item';
+    el.innerHTML = `<div class="room-row"><strong>${escapeHtml(r.name)}</strong> <span class="muted">(${r.length1}x${r.length2})</span></div>`;
+    const editBtn = document.createElement('button'); editBtn.textContent='Edit'; editBtn.onclick = ()=>{ showRoomPanel(true,r); };
+    const delBtn = document.createElement('button'); delBtn.textContent='Delete'; delBtn.onclick = ()=>{ if(confirm('Delete room?')){ currentDoc.rooms = currentDoc.rooms.filter(x=>x.id!==r.id); syncTextarea(); } };
+    const addDoorBtnLocal = document.createElement('button'); addDoorBtnLocal.textContent='Add Door'; addDoorBtnLocal.onclick = ()=>{ showDoorPanel(); doorRoom.value=r.id; };
+    const row = document.createElement('div'); row.className='room-actions'; row.append(editBtn, addDoorBtnLocal, delBtn);
+    el.append(row);
+    roomsList.append(el);
+  });
+}
+
+function populateDoorRoomSelects(){
+  const rooms = currentDoc.rooms || [];
+  doorRoom.innerHTML = rooms.map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+  doorConnect.innerHTML = '<option value="">(none)</option>' + rooms.map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c])); }
 
 function download(filename, text){
   const blob = new Blob([text], {type:'text/plain'});
