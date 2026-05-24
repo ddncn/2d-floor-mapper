@@ -55,6 +55,7 @@ function syncTextarea(){ dataEl.value = JSON.stringify(currentDoc, null, 2); deb
 function renderAll(){
   parseDoc();
   metaEl.textContent = renderMetadata(currentDoc);
+  renderVisual(currentDoc);
   asciiEl.textContent = renderAsciiWithDoors(currentDoc);
   renderRoomsList();
   populateDoorRoomSelects();
@@ -181,43 +182,104 @@ function renderMetadata(doc){
   return lines.join('\n');
 }
 
-function renderAsciiWithDoors(doc){
-  const blocks = (doc.rooms||[]).map(r=>{
-    const w = Math.max(20, Math.round(r.length1||20));
-    const h = Math.max(5, Math.round((r.length2||10)/3)+3);
-    // build empty box
-    let top = '+' + '-'.repeat(w) + '+';
-    let mid = [];
-    mid.push('| ' + r.name.padEnd(w-2) + '|');
-    for(let i=0;i<h-2;i++) mid.push('|' + ' '.repeat(w) + '|');
-    let bottom = '+' + '-'.repeat(w) + '+';
+function renderVisual(doc){
+  const area = document.getElementById('visual');
+  area.innerHTML = '';
+  // choose a pixelsPerUnit so rooms sizes are reasonable
+  const ppu = 10; // pixels per length unit
+  // ensure each room has x,y
+  (doc.rooms||[]).forEach((r, idx)=>{ if(typeof r.x !== 'number') r.x = idx * 20; if(typeof r.y !== 'number') r.y = 0; });
 
-    // place doors
-    (r.doors||[]).forEach(d=>{
-      const wall = (d.wallId||'').toUpperCase();
-      const offset = Number(d.offsetFromCorner) || 0;
-      const doorWidth = Math.max(1, Math.round(Number(d.width)||1));
+  doc.rooms.forEach(r=>{
+    const el = document.createElement('div');
+    el.className = 'room-visual';
+    el.dataset.id = r.id;
+    el.style.width = Math.max(40, Math.round(r.length1 * ppu)) + 'px';
+    el.style.height = Math.max(30, Math.round(r.length2 * ppu)) + 'px';
+    el.style.left = (r.x * ppu) + 'px';
+    el.style.top = (r.y * ppu) + 'px';
+    el.innerHTML = `<div class="room-title">${escapeHtml(r.name)}</div>`;
+    makeDraggable(el, r);
+    area.appendChild(el);
+  });
+}
+
+function makeDraggable(el, room){
+  let dragging = false;
+  let startX=0, startY=0, origX=0, origY=0;
+  el.addEventListener('pointerdown', (ev)=>{
+    el.setPointerCapture(ev.pointerId);
+    dragging = true;
+    startX = ev.clientX; startY = ev.clientY;
+    origX = parseInt(el.style.left||0,10); origY = parseInt(el.style.top||0,10);
+    el.classList.add('dragging');
+  });
+  window.addEventListener('pointermove', (ev)=>{
+    if(!dragging) return;
+    const dx = ev.clientX - startX; const dy = ev.clientY - startY;
+    el.style.left = (origX + dx) + 'px'; el.style.top = (origY + dy) + 'px';
+  });
+  window.addEventListener('pointerup', (ev)=>{
+    if(!dragging) return;
+    dragging = false; el.classList.remove('dragging');
+    // store new room coords in room.x, room.y (in units)
+    const ppu = 10;
+    const left = parseInt(el.style.left||0,10); const top = parseInt(el.style.top||0,10);
+    room.x = Math.round(left / ppu);
+    room.y = Math.round(top / ppu);
+    syncTextarea();
+  });
+}
+
+function renderAsciiWithDoors(doc){
+  // Very small scaled ASCII based on room positions and sizes
+  const unitPerChar = 4; // length units per character cell
+  const rooms = doc.rooms || [];
+  // compute ascii rectangles
+  const rects = rooms.map(r => {
+    const w = Math.max(6, Math.round(r.length1 / unitPerChar));
+    const h = Math.max(3, Math.round(r.length2 / (unitPerChar*0.6)));
+    const x = Math.round((r.x||0) / unitPerChar) + 1;
+    const y = Math.round((r.y||0) / unitPerChar) + 1;
+    return {id:r.id, name:r.name, x,y,w,h,doors:r.doors||[]};
+  });
+  // compute canvas size
+  let maxX=0,maxY=0; rects.forEach(rc=>{ maxX = Math.max(maxX, rc.x+rc.w+1); maxY = Math.max(maxY, rc.y+rc.h+1); });
+  // build grid
+  const grid = Array.from({length:maxY+1}, ()=>Array.from({length:maxX+1}, ()=>' '));
+  rects.forEach(rc=>{
+    const left = rc.x; const right = rc.x + rc.w; const top = rc.y; const bottom = rc.y + rc.h;
+    // draw horizontal borders
+    for(let cx=left; cx<=right; cx++){
+      grid[top][cx] = '-'; grid[bottom][cx] = '-';
+    }
+    // draw vertical borders
+    for(let ry=top; ry<=bottom; ry++){
+      grid[ry][left] = '|'; grid[ry][right] = '|';
+    }
+    grid[top][left] = '+'; grid[top][right] = '+'; grid[bottom][left] = '+'; grid[bottom][right] = '+';
+    // write name
+    const name = rc.name.slice(0, rc.w-1);
+    for(let i=0;i<name.length;i++){ grid[top+1][left+1+i] = name[i]; }
+    // doors
+    rc.doors.forEach(d=>{
+      const wall = (d.wallId||'').toUpperCase(); const offset = Math.round((d.offsetFromCorner||0)/unitPerChar);
       if(wall==='N'){
-        // position along top border; scale offset relative to length1
-        const pos = 1 + Math.max(0, Math.min(w-1, Math.round((offset / (r.length1||w)) * w)));
-        top = replaceAt(top, pos, 'D');
+        const px = Math.min(right-1, left+1+offset);
+        grid[top][px] = 'D';
       } else if(wall==='S'){
-        const pos = 1 + Math.max(0, Math.min(w-1, Math.round((offset / (r.length1||w)) * w)));
-        bottom = replaceAt(bottom, pos, 'D');
-      } else if(wall==='E'){
-        const midRow = Math.floor(mid.length/2);
-        // replace right wall char '|' with 'D'
-        mid[midRow] = replaceAt(mid[midRow], mid[midRow].length-1, 'D');
+        const px = Math.min(right-1, left+1+offset);
+        grid[bottom][px] = 'D';
       } else if(wall==='W'){
-        const midRow = Math.floor(mid.length/2);
-        // replace left wall '|' with 'D'
-        mid[midRow] = replaceAt(mid[midRow], 0, 'D');
+        const py = Math.min(bottom-1, top+1+offset);
+        grid[py][left] = 'D';
+      } else if(wall==='E'){
+        const py = Math.min(bottom-1, top+1+offset);
+        grid[py][right] = 'D';
       }
     });
-
-    return [top, ...mid, bottom].join('\n');
   });
-  return blocks.join('\n\n');
+  return grid.map(row=>row.join('')).join('\n');
 }
 
 function replaceAt(str, idx, chr){
