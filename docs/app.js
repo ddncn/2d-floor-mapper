@@ -79,7 +79,11 @@ fileInput.addEventListener('change', (e)=>{
 });
 
 saveJsonBtn.addEventListener('click', ()=>{ download('floorplan.json', dataEl.value); });
-exportMetaBtn.addEventListener('click', ()=>{ download('floorplan_metadata.md', metaEl.textContent); });
+exportMetaBtn.addEventListener('click', ()=>{
+  // Wrap metadata in a collapsible details block so GitHub renders it collapsed
+  const md = `# Floorplan Metadata\n\n<details>\n<summary>Show metadata</summary>\n\n\`\`\`\n${metaEl.textContent}\n\`\`\`\n\n</details>`;
+  download('floorplan_metadata.md', md);
+});
 exportAsciiBtn.addEventListener('click', ()=>{ download('floorplan_ascii.txt', asciiEl.textContent); });
 
 newPlanBtn.addEventListener('click', ()=>{ currentDoc = {rooms:[]}; syncTextarea(); showRoomPanel(false); });
@@ -190,6 +194,14 @@ function renderVisual(doc){
   // ensure each room has x,y
   (doc.rooms||[]).forEach((r, idx)=>{ if(typeof r.x !== 'number') r.x = idx * 20; if(typeof r.y !== 'number') r.y = 0; });
 
+  // create SVG overlay for connectors
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class','visual-svg');
+  svg.style.position = 'absolute'; svg.style.left = '0'; svg.style.top = '0'; svg.style.pointerEvents = 'none';
+  area.appendChild(svg);
+
+  // create room elements
   doc.rooms.forEach(r=>{
     const el = document.createElement('div');
     el.className = 'room-visual';
@@ -202,6 +214,65 @@ function renderVisual(doc){
     makeDraggable(el, r);
     area.appendChild(el);
   });
+
+  // adjust svg size to content
+  svg.setAttribute('width', area.scrollWidth || area.clientWidth);
+  svg.setAttribute('height', area.scrollHeight || area.clientHeight);
+
+  // draw connectors for doors that link rooms
+  const ppuLocal = ppu;
+  doc.rooms.forEach(src=>{
+    (src.doors||[]).forEach(d=>{
+      if(!d.connectsToRoomId) return;
+      const dst = (doc.rooms||[]).find(rr=>rr.id===d.connectsToRoomId);
+      if(!dst) return;
+      // compute source point
+      const srcLeft = (src.x||0) * ppuLocal; const srcTop = (src.y||0) * ppuLocal;
+      const srcW = Math.max(40, Math.round(src.length1 * ppuLocal)); const srcH = Math.max(30, Math.round(src.length2 * ppuLocal));
+      const spt = computeDoorPoint(src, d, srcLeft, srcTop, srcW, srcH);
+      // find matching door on dst that points back to src
+      const matching = (dst.doors||[]).find(dd => dd.connectsToRoomId === src.id);
+      let dpt;
+      if(matching){
+        const dstLeft = (dst.x||0) * ppuLocal; const dstTop = (dst.y||0) * ppuLocal;
+        const dstW = Math.max(40, Math.round(dst.length1 * ppuLocal)); const dstH = Math.max(30, Math.round(dst.length2 * ppuLocal));
+        dpt = computeDoorPoint(dst, matching, dstLeft, dstTop, dstW, dstH);
+      } else {
+        // fallback to center of dst
+        dpt = {x: (dst.x||0)*ppuLocal + Math.max(40, Math.round(dst.length1 * ppuLocal))/2, y: (dst.y||0)*ppuLocal + Math.max(30, Math.round(dst.length2 * ppuLocal))/2};
+      }
+      // draw line
+      const line = document.createElementNS(svgNS,'line');
+      line.setAttribute('x1', spt.x); line.setAttribute('y1', spt.y);
+      line.setAttribute('x2', dpt.x); line.setAttribute('y2', dpt.y);
+      line.setAttribute('stroke','#ff7043'); line.setAttribute('stroke-width','2'); line.setAttribute('stroke-linecap','round');
+      svg.appendChild(line);
+    });
+  });
+}
+
+function computeDoorPoint(room, door, left, top, widthPx, heightPx){
+  const wall = (door.wallId||'').toUpperCase();
+  const off = Number(door.offsetFromCorner) || 0;
+  let x = left + widthPx/2; let y = top + heightPx/2;
+  if(wall==='N'){
+    const frac = room.length1 ? (off / room.length1) : 0.5;
+    x = left + Math.min(widthPx-4, Math.max(4, Math.round(frac * widthPx)));
+    y = top;
+  } else if(wall==='S'){
+    const frac = room.length1 ? (off / room.length1) : 0.5;
+    x = left + Math.min(widthPx-4, Math.max(4, Math.round(frac * widthPx)));
+    y = top + heightPx;
+  } else if(wall==='W'){
+    const frac = room.length2 ? (off / room.length2) : 0.5;
+    x = left;
+    y = top + Math.min(heightPx-4, Math.max(4, Math.round(frac * heightPx)));
+  } else if(wall==='E'){
+    const frac = room.length2 ? (off / room.length2) : 0.5;
+    x = left + widthPx;
+    y = top + Math.min(heightPx-4, Math.max(4, Math.round(frac * heightPx)));
+  }
+  return {x,y};
 }
 
 function makeDraggable(el, room){
@@ -225,10 +296,33 @@ function makeDraggable(el, room){
     // store new room coords in room.x, room.y (in units)
     const ppu = 10;
     const left = parseInt(el.style.left||0,10); const top = parseInt(el.style.top||0,10);
-    room.x = Math.round(left / ppu);
-    room.y = Math.round(top / ppu);
+    // snap to grid (1 unit)
+    const gridUnits = 1;
+    room.x = Math.round((left / ppu) / gridUnits) * gridUnits;
+    room.y = Math.round((top / ppu) / gridUnits) * gridUnits;
+    // resolve collisions with other rooms
+    resolveCollisions(room, currentDoc);
     syncTextarea();
   });
+}
+
+function resolveCollisions(movedRoom, doc){
+  const others = (doc.rooms||[]).filter(r=>r.id!==movedRoom.id);
+  const maxAttempts = 50;
+  let attempt = 0;
+  while(attempt++ < maxAttempts){
+    const overlap = others.find(o=>isOverlapRect(movedRoom,o));
+    if(!overlap) break;
+    // push movedRoom right by a small step to avoid overlap
+    movedRoom.x += Math.max(1, Math.round(overlap.length1||5));
+  }
+}
+
+function isOverlapRect(a,b){
+  const ax1 = a.x; const ay1 = a.y; const ax2 = a.x + (a.length1||1); const ay2 = a.y + (a.length2||1);
+  const bx1 = b.x; const by1 = b.y; const bx2 = b.x + (b.length1||1); const by2 = b.y + (b.length2||1);
+  return !(ax2 <= bx1 || ax1 >= bx2 || ay2 <= by1 || ay1 >= by2);
+}
 }
 
 function renderAsciiWithDoors(doc){
