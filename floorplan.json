@@ -1,0 +1,14 @@
+{
+  "rooms": [
+    {
+      "id": "room_u0yrpq",
+      "name": "Test Room",
+      "type": null,
+      "notes": null,
+      "length1": 10,
+      "length2": 8,
+      "shade": null,
+      "doors": []
+    }
+  ]
+}

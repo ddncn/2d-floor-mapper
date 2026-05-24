@@ -1,0 +1,16 @@
+{
+  "name": "2d-floor-mapper",
+  "version": "0.1.0",
+  "description": "2D floor planner core library, CLI and static web UI",
+  "main": "src/index.js",
+  "bin": {
+    "2dfloor": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node bin/cli.js",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "keywords": ["floorplan","2d","ascii","cli"],
+  "author": "",
+  "license": "MIT"
+}
