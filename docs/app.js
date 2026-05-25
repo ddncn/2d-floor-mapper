@@ -2,7 +2,7 @@
 const sample = {
   rooms: [
     {id:'r1', name:'Living Room', length1:20, length2:15, shade:'light', notes:'Hardwood', doors:[{id:'d1', wallId:'S', offsetFromCorner:10, width:3, connectsToRoomId:'r2'}]},
-    {id:'r2', name:'Kitchen', length1:12, length2:10, shade:'dark', doors:[]}
+    {id:'r2', name:'Kitchen', length1:12, length2:10, shade:'dark', notes:'Tile', doors:[{id:'d2', wallId:'N', offsetFromCorner:10, width:3, connectsToRoomId:'r1'}]}
   ]
 };
 
@@ -10,14 +10,50 @@ const dataEl = document.getElementById('data');
 const metaEl = document.getElementById('meta');
 const asciiEl = document.getElementById('ascii');
 const fileInput = document.getElementById('fileInput');
+const fileInputContainer = document.getElementById('fileInputContainer');
+const showUploadBtn = document.getElementById('showUploadBtn');
 const loadSampleBtn = document.getElementById('loadSample');
 const saveJsonBtn = document.getElementById('saveJson');
 const exportMetaBtn = document.getElementById('exportMeta');
 const exportAsciiBtn = document.getElementById('exportAscii');
+const themeToggleBtn = document.getElementById('themeToggle');
+
+// initialize theme from cookie
+(function(){
+  try{
+    const t = getCookie('floorplanner_theme');
+    if(t === 'dark') document.documentElement.classList.add('dark-theme');
+    else if(t === 'light') document.documentElement.classList.remove('dark-theme');
+    else if(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark-theme');
+  }catch(e){}
+  if(themeToggleBtn){ themeToggleBtn.addEventListener('click', ()=>{
+    const isDark = document.documentElement.classList.toggle('dark-theme');
+    setCookie('floorplanner_theme', isDark ? 'dark' : 'light', 365);
+    showToast('Theme: ' + (isDark ? 'Dark' : 'Light'), 1000);
+  }); }
+})();
+
+const editorDetails = document.getElementById('editorDetails');
+const tabButtons = document.querySelectorAll('.tab-btn');
 
 const newPlanBtn = document.getElementById('newPlan');
-const addRoomBtn = document.getElementById('addRoom');
 const addDoorBtn = document.getElementById('addDoor');
+
+// start with editor closed unless user toggles
+if(editorDetails) editorDetails.open = false;
+
+function switchTab(tabId){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+  const content = document.getElementById(tabId);
+  if(btn) btn.classList.add('active');
+  if(content) content.classList.add('active');
+}
+
+// wire tab buttons
+tabButtons.forEach(b=>b.addEventListener('click', ()=>{ const t = b.dataset.tab; switchTab(t); }));
+
 
 const roomPanel = document.getElementById('roomPanel');
 const roomPanelTitle = document.getElementById('roomPanelTitle');
@@ -45,6 +81,7 @@ let currentDoc = null;
 let editingRoomId = null;
 
 function uid(prefix){ return prefix + Math.random().toString(36).slice(2,8); }
+function oppositeWall(w){ const m = {N:'S',S:'N',E:'W',W:'E'}; return (w||'').toUpperCase().split('')[0] ? m[(w||'').toUpperCase()]||w : w; }
 
 function parseDoc(){
   try{ currentDoc = JSON.parse(dataEl.value); if(!currentDoc.rooms) currentDoc.rooms = []; } catch(e){ currentDoc = {rooms:[]}; }
@@ -52,8 +89,72 @@ function parseDoc(){
 
 function syncTextarea(){ dataEl.value = JSON.stringify(currentDoc, null, 2); debounceRender(); }
 
+function setCookie(name, value, days){ const d = new Date(); d.setTime(d.getTime() + (days*24*60*60*1000)); document.cookie = name + '=' + encodeURIComponent(value) + ';path=/;expires=' + d.toUTCString(); }
+function getCookie(name){ const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)'); return v ? decodeURIComponent(v.pop()) : null; }
+
+function showToast(msg, duration=2500){
+  let t = document.getElementById('toast');
+  if(!t){ t = document.createElement('div'); t.id='toast'; t.className='toast'; document.body.appendChild(t); }
+  t.textContent = msg; t.style.opacity = '1';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(()=>{ try{ t.style.opacity='0'; }catch(e){} }, duration);
+}
+
+function mirrorOffset(srcRoom, srcDoor, dstRoom, oppWall){
+  const wall = (srcDoor.wallId||'').toUpperCase();
+  const srcLen = (wall==='N' || wall==='S') ? (srcRoom.length1||1) : (srcRoom.length2||1);
+  const dstLen = (oppWall==='N' || oppWall==='S') ? (dstRoom.length1||1) : (dstRoom.length2||1);
+  const frac = srcLen>0 ? ((Number(srcDoor.offsetFromCorner)||0) / srcLen) : 0.5;
+  const dstOffset = Math.round(frac * dstLen);
+  return dstOffset;
+}
+
+function normalizeReciprocalDoors(){
+  if(!currentDoc || !Array.isArray(currentDoc.rooms)) return;
+  let created = 0; let cleaned = 0;
+  const roomsById = {};
+  currentDoc.rooms.forEach(r=>roomsById[r.id]=r);
+  // cleanup dangling connectsToRoomId
+  currentDoc.rooms.forEach(r=>{
+    r.doors = r.doors || [];
+    r.doors.forEach(d=>{
+      if(d.connectsToRoomId){ if(!roomsById[d.connectsToRoomId]){ d.connectsToRoomId = null; cleaned++; } }
+    });
+  });
+  // ensure reciprocals
+  currentDoc.rooms.forEach(src=>{
+    (src.doors||[]).forEach(d=>{
+      if(!d.connectsToRoomId) return;
+      const dst = roomsById[d.connectsToRoomId];
+      if(!dst) return; // already cleaned
+      const opp = oppositeWall(d.wallId);
+      const dstDoors = dst.doors || [];
+      // look for an existing reciprocal door linked back to src on the opposite wall
+      let match = dstDoors.find(dd => String((dd.connectsToRoomId||'')) === String(src.id) && String((dd.wallId||'')).toUpperCase() === opp);
+      if(match) return; // already reciprocal
+      // try to find a door on opposite wall and close offset to mirror
+      const mirroredOffset = mirrorOffset(src,d,dst,opp);
+      const threshold = Math.max(1, Math.round(( (opp==='N'||opp==='S') ? dst.length1 : dst.length2 ) * 0.15));
+      match = dstDoors.find(dd => String((dd.wallId||'')).toUpperCase() === opp && Math.abs((dd.offsetFromCorner||0) - mirroredOffset) <= threshold);
+      if(match){ match.connectsToRoomId = src.id; created++; return; }
+      // create reciprocal
+      const rec = { id: uid('door_'), wallId: opp, offsetFromCorner: mirroredOffset, width: d.width || 3, connectsToRoomId: src.id };
+      dst.doors = dst.doors || [];
+      dst.doors.push(rec);
+      created++;
+    });
+  });
+  if(created>0 || cleaned>0){
+    // update textarea content directly to avoid scheduling extra render loops
+    try{ dataEl.value = JSON.stringify(currentDoc, null, 2); }catch(e){}
+    if(created>0) showToast(`${created} reciprocal door(s) created`);
+    if(cleaned>0) showToast(`${cleaned} dangling door link(s) cleared`);
+  }
+}
+
 function renderAll(){
   parseDoc();
+  normalizeReciprocalDoors();
   metaEl.textContent = renderMetadata(currentDoc);
   renderVisual(currentDoc);
   asciiEl.textContent = renderAsciiWithDoors(currentDoc);
@@ -68,30 +169,61 @@ function debounceRender(){
 
 dataEl.addEventListener('input', debounceRender);
 
-loadSampleBtn.addEventListener('click', ()=>{ dataEl.value = JSON.stringify(sample, null, 2); renderAll(); });
+if(loadSampleBtn){
+  loadSampleBtn.addEventListener('click', ()=>{ try{ dataEl.value = JSON.stringify(sample, null, 2); renderAll(); } catch(e){ console.error('loadSample error', e); alert('Failed to load sample: '+e); } });
+} else console.warn('loadSampleBtn not found');
 
-fileInput.addEventListener('change', (e)=>{
-  const f = e.target.files && e.target.files[0];
-  if(!f) return;
-  const r = new FileReader();
-  r.onload = ()=>{ dataEl.value = r.result; renderAll(); };
-  r.readAsText(f);
-});
+if(showUploadBtn){
+  showUploadBtn.addEventListener('click', ()=>{
+    if(fileInputContainer){
+      fileInputContainer.hidden = !fileInputContainer.hidden;
+      if(!fileInputContainer.hidden && fileInput) fileInput.focus();
+    }
+  });
+} else console.warn('showUploadBtn not found');
 
-saveJsonBtn.addEventListener('click', ()=>{ download('floorplan.json', dataEl.value); });
-exportMetaBtn.addEventListener('click', ()=>{
-  // Wrap metadata in a collapsible details block so GitHub renders it collapsed
+if(fileInput){
+  fileInput.addEventListener('change', (e)=>{
+    const f = e.target.files && e.target.files[0];
+    if(!f) return;
+    const r = new FileReader();
+    r.onload = ()=>{ dataEl.value = r.result; renderAll(); };
+    r.readAsText(f);
+  });
+} else console.warn('fileInput not found');
+
+if(saveJsonBtn){ saveJsonBtn.addEventListener('click', ()=>{ download('floorplan.json', dataEl.value); }); } else console.warn('saveJsonBtn not found');
+
+if(exportMetaBtn){ exportMetaBtn.addEventListener('click', ()=>{
   const md = `# Floorplan Metadata\n\n<details>\n<summary>Show metadata</summary>\n\n\`\`\`\n${metaEl.textContent}\n\`\`\`\n\n</details>`;
   download('floorplan_metadata.md', md);
-});
-exportAsciiBtn.addEventListener('click', ()=>{ download('floorplan_ascii.txt', asciiEl.textContent); });
+}); } else console.warn('exportMetaBtn not found');
 
-newPlanBtn.addEventListener('click', ()=>{ currentDoc = {rooms:[]}; syncTextarea(); showRoomPanel(false); });
-addRoomBtn.addEventListener('click', ()=>{ showRoomPanel(false); });
-addDoorBtn.addEventListener('click', ()=>{ showDoorPanel(); });
+if(exportAsciiBtn){ exportAsciiBtn.addEventListener('click', ()=>{ download('floorplan_ascii.txt', asciiEl.textContent); }); } else console.warn('exportAsciiBtn not found');
 
-cancelRoomBtn.addEventListener('click', ()=>{ hideRoomPanel(); });
-cancelDoorBtn.addEventListener('click', ()=>{ hideDoorPanel(); });
+if(newPlanBtn){
+  newPlanBtn.addEventListener('click', ()=>{
+    try{
+      console.log('newPlan clicked');
+      currentDoc = {rooms:[]};
+      syncTextarea();
+      showRoomPanel(false);
+    }catch(e){
+      console.error('newPlan handler error', e);
+      alert('Failed to create a new plan: ' + e);
+    }
+  });
+} else {
+  console.warn('newPlanBtn not found');
+}
+
+if(addDoorBtn){ addDoorBtn.addEventListener('click', ()=>{ showDoorPanel(); }); } else console.warn('addDoorBtn not found');
+const addRoomLocalBtn = document.getElementById('addRoomLocal');
+if(addRoomLocalBtn){ addRoomLocalBtn.addEventListener('click', ()=>{ showRoomPanel(false); }); } else console.warn('addRoomLocal not found');
+
+
+if(cancelRoomBtn){ cancelRoomBtn.addEventListener('click', ()=>{ hideRoomPanel(); }); } else console.warn('cancelRoomBtn not found');
+if(cancelDoorBtn){ cancelDoorBtn.addEventListener('click', ()=>{ hideDoorPanel(); }); } else console.warn('cancelDoorBtn not found');
 
 saveRoomBtn.addEventListener('click', ()=>{
   const name = (roomName.value || '').trim() || 'Room';
@@ -112,15 +244,39 @@ saveRoomBtn.addEventListener('click', ()=>{
 
 saveDoorBtn.addEventListener('click', ()=>{
   const rid = doorRoom.value;
-  const wall = doorWall.value;
+  const wall = (doorWall.value||'').toUpperCase();
   const offset = Number(doorOffset.value) || 0;
   const width = Number(doorWidth.value) || 3;
   const connectsTo = doorConnect.value || null;
   const room = currentDoc.rooms.find(r=>r.id===rid);
   if(!room){ alert('Room not found'); return; }
-  const door = { id: uid('door_'), wallId: wall, offsetFromCorner:offset, width, connectsToRoomId: connectsTo || null };
   room.doors = room.doors || [];
+  const door = { id: uid('door_'), wallId: wall, offsetFromCorner:offset, width, connectsToRoomId: connectsTo || null };
   room.doors.push(door);
+
+  // if door connects to another room, ensure a reciprocal door exists on that room
+  if(connectsTo){
+    const dst = currentDoc.rooms.find(r=>r.id===connectsTo);
+    if(dst){
+      dst.doors = dst.doors || [];
+      const opp = oppositeWall(wall);
+      // prefer an existing door that already links back
+      let matching = dst.doors.find(dd => (dd.connectsToRoomId === room.id) && (String(dd.wallId||'').toUpperCase() === opp));
+      if(!matching){
+        // try to find a door at same wall/offset and attach it
+        matching = dst.doors.find(dd => String(dd.wallId||'').toUpperCase() === opp && Math.abs((dd.offsetFromCorner||0) - offset) < 0.5);
+        if(matching){
+          matching.connectsToRoomId = room.id;
+        } else {
+          // create reciprocal door; compute mirrored offset proportional to wall lengths
+          const mirroredOffset = mirrorOffset(room, door, dst, opp);
+          const recDoor = { id: uid('door_'), wallId: opp, offsetFromCorner: mirroredOffset, width, connectsToRoomId: room.id };
+          dst.doors.push(recDoor);
+        }
+      }
+    }
+  }
+
   syncTextarea(); hideDoorPanel();
 });
 
@@ -143,12 +299,39 @@ function renderRoomsList(){
   roomsList.innerHTML = '';
   (currentDoc.rooms||[]).forEach(r=>{
     const el = document.createElement('div'); el.className='room-item';
-    el.innerHTML = `<div class="room-row"><strong>${escapeHtml(r.name)}</strong> <span class="muted">(${r.length1}x${r.length2})</span></div>`;
+    const header = document.createElement('div'); header.className='room-row';
+    header.innerHTML = `<strong>${escapeHtml(r.name)}</strong> <span class="muted">(${r.length1}x${r.length2})</span>`;
+    el.appendChild(header);
+    // metadata under each room
+    const meta = document.createElement('div'); meta.className='room-meta muted';
+    const notes = r.notes ? `<div>Notes: ${escapeHtml(r.notes)}</div>` : '';
+    const shade = r.shade ? `<div>Shade: ${escapeHtml(r.shade)}</div>` : '';
+    const doorsHtml = (r.doors||[]).map(d=>{
+      const target = d.connectsToRoomId ? (currentDoc.rooms.find(rr=>rr.id===d.connectsToRoomId)||{}).name : '(none)';
+      return `<div class="door-entry">Wall ${escapeHtml(d.wallId)} - offset ${escapeHtml(String(d.offsetFromCorner))} - width ${escapeHtml(String(d.width))} -> ${escapeHtml(target)}</div>`;
+    }).join('');
+    meta.innerHTML = `${notes}${shade}<div>Doors:${doorsHtml ? '' : ' None'}</div><div>${doorsHtml}</div>`;
+    el.appendChild(meta);
+
+    const actions = document.createElement('div'); actions.className='room-actions';
     const editBtn = document.createElement('button'); editBtn.textContent='Edit'; editBtn.onclick = ()=>{ showRoomPanel(true,r); };
-    const delBtn = document.createElement('button'); delBtn.textContent='Delete'; delBtn.onclick = ()=>{ if(confirm('Delete room?')){ currentDoc.rooms = currentDoc.rooms.filter(x=>x.id!==r.id); syncTextarea(); } };
     const addDoorBtnLocal = document.createElement('button'); addDoorBtnLocal.textContent='Add Door'; addDoorBtnLocal.onclick = ()=>{ showDoorPanel(); doorRoom.value=r.id; };
-    const row = document.createElement('div'); row.className='room-actions'; row.append(editBtn, addDoorBtnLocal, delBtn);
-    el.append(row);
+    const delBtn = document.createElement('button'); delBtn.textContent='Delete'; delBtn.onclick = ()=>{ if(confirm('Delete room?')){ // remove reciprocal doors in other rooms
+        let removedRecips = 0;
+        currentDoc.rooms.forEach(other=>{
+          if(other.id===r.id) return;
+          const before = (other.doors||[]).length;
+          other.doors = (other.doors||[]).filter(dd=>dd.connectsToRoomId !== r.id);
+          removedRecips += before - (other.doors||[]).length;
+        });
+        currentDoc.rooms = currentDoc.rooms.filter(x=>x.id!==r.id);
+        syncTextarea();
+        if(removedRecips>0) showToast(`${removedRecips} reciprocal door(s) removed`);
+      } };
+
+    actions.append(editBtn, addDoorBtnLocal, delBtn);
+    el.appendChild(actions);
+
     roomsList.append(el);
   });
 }
@@ -213,6 +396,23 @@ function renderVisual(doc){
     el.innerHTML = `<div class="room-title">${escapeHtml(r.name)}</div>`;
     makeDraggable(el, r);
     area.appendChild(el);
+
+    // render door glyphs inside the room
+    (r.doors||[]).forEach(d=>{
+      const leftPx = (r.x||0) * ppu; const topPx = (r.y||0) * ppu;
+      const wPx = Math.max(40, Math.round(r.length1 * ppu)); const hPx = Math.max(30, Math.round(r.length2 * ppu));
+      const pt = computeDoorPoint(r, d, leftPx, topPx, wPx, hPx);
+      const relX = pt.x - leftPx; const relY = pt.y - topPx;
+      const doorEl = document.createElement('div');
+      doorEl.className = 'door-visual';
+      // adjust size to door.width where possible
+      const doorWidthPx = Math.max(8, Math.round((d.width||3) * ppu * 0.6));
+      doorEl.style.width = doorWidthPx + 'px';
+      doorEl.style.height = Math.max(6, Math.round(8 * (doorWidthPx/14))) + 'px';
+      doorEl.style.left = relX + 'px';
+      doorEl.style.top = relY + 'px';
+      el.appendChild(doorEl);
+    });
   });
 
   // adjust svg size to content
@@ -323,7 +523,6 @@ function isOverlapRect(a,b){
   const bx1 = b.x; const by1 = b.y; const bx2 = b.x + (b.length1||1); const by2 = b.y + (b.length2||1);
   return !(ax2 <= bx1 || ax1 >= bx2 || ay2 <= by1 || ay1 >= by2);
 }
-}
 
 function renderAsciiWithDoors(doc){
   // Very small scaled ASCII based on room positions and sizes
@@ -380,6 +579,28 @@ function replaceAt(str, idx, chr){
   if(idx<0 || idx>=str.length) return str;
   return str.slice(0,idx) + chr + str.slice(idx+1);
 }
+
+// splitter resize behavior
+(function setupSplitter(){
+  const split = document.getElementById('split');
+  const splitter = document.getElementById('splitter');
+  const leftPane = document.getElementById('leftPane');
+  if(!split || !splitter || !leftPane) return;
+  // disable splitter on small screens (layout switches to stacked)
+  if(window.matchMedia && window.matchMedia('(max-width:980px)').matches){
+    try{ splitter.style.display = 'none'; }catch(e){}
+    try{ split.style.gridTemplateColumns = '1fr'; }catch(e){}
+    return;
+  }
+  let dragging = false; let startX = 0; let startLeft = 0;
+  splitter.addEventListener('pointerdown', (e)=>{
+    dragging = true; startX = e.clientX; startLeft = leftPane.getBoundingClientRect().width; splitter.setPointerCapture(e.pointerId); document.body.style.userSelect='none';
+  });
+  window.addEventListener('pointermove', (e)=>{
+    if(!dragging) return; const dx = e.clientX - startX; const newLeft = Math.max(200, Math.min(480, startLeft + dx)); split.style.gridTemplateColumns = `${newLeft}px 8px 1fr 1fr`;
+  });
+  window.addEventListener('pointerup', (e)=>{ if(!dragging) return; dragging = false; document.body.style.userSelect='auto'; try{ splitter.releasePointerCapture(e.pointerId); }catch(e){} });
+})();
 
 // initial render
 renderAll();
